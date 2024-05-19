@@ -1,0 +1,179 @@
+######数据过滤#######
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+#remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
+library(DoubletFinder)
+dir<-dir(path = "~/project/scRNA_PND/",pattern = "*PND15.*matrix$")
+data<-list()
+for (i in dir) {
+  count<-Read10X(paste0("/Users/twenty-two/project/scRNA_PND/",i))
+  obj<-CreateSeuratObject(counts = count, project = unlist(str_split(i,"_"))[1], min.cells = 3, min.features = 200)
+  obj[["percent.mt"]]<-PercentageFeatureSet(object = obj,pattern = "^mt-")
+  data[unlist(str_split(i,"_"))[1]]<-subset(obj,subset = nFeature_RNA>500 & percent.mt<5)#10
+}
+# Visualize QC metrics as a violin plot
+VlnPlot(data[[2]], features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+######数据预处理######
+data <- lapply(X = data, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+features <- SelectIntegrationFeatures(object.list = data)
+data <- lapply(X = data, FUN = function(x) {
+  x <- ScaleData(x, features = features, verbose = FALSE)
+  x <- RunPCA(x, features = features, verbose = FALSE)
+})
+######数据整合umap聚类#####
+anchors <- FindIntegrationAnchors(object.list = data, anchor.features = features, reduction = "rpca")
+integrate <- IntegrateData(anchorset = anchors)
+# specify that we will perform downstream analysis on the corrected data note that the
+# original unmodified data still resides in the 'RNA' assay
+DefaultAssay(integrate) <- "integrated"
+# Run the standard workflow for visualization and clustering
+integrate <- ScaleData(integrate, verbose = FALSE)
+integrate <- RunPCA(integrate, npcs = 100, verbose = FALSE)
+# integrate <- JackStraw(integrate, num.replicate = 100)
+# integrate <- ScoreJackStraw(integrate, dims = 1:30)
+# JackStrawPlot(integrate, dims = 1:20)
+# ElbowPlot(integrate)
+integrate <- RunUMAP(integrate, reduction = "pca", dims = 1:15)
+integrate <- FindNeighbors(integrate, reduction = "pca", dims = 1:15)
+integrate <- FindClusters(integrate, resolution = 0.35)
+DimPlot(integrate, reduction = "umap",label = T,split.by = "orig.ident")
+
+#subset<-subset(integrate,subset = seurat_clusters !=14)
+saveRDS(integrate,"~/project/scRNA_PND/PND15_KO_dim15_resolution0.35_cluster15.rds")
+
+
+
+####计算基因表达均值&marker基因####
+DefaultAssay(integrate) = "RNA"
+ave<-AverageExpression(subset)
+write.table(ave$RNA,"scRNA_PND/ave_expression.txt",quote = F,sep = "\t")
+markers <- FindAllMarkers(integrate, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+# markers %>%
+#   group_by(cluster) %>%
+#   slice_max(n = 2, order_by = avg_log2FC)
+write.table(markers,"~/project/scRNA_PND/marker.txt",sep = "\t",quote = F)
+
+PND5<-subset(data,subset = orig.ident =="PND5")
+ave<-AverageExpression(PND5)
+write.csv(ave$RNA,"project/scRNA_PND/PND5_aveExp.csv")
+
+DefaultAssay(integrate) = "RNA"
+# find markers for every cluster compared to all remaining cells, report only the positive
+# 
+# PND1 PND10 PND15  PND5 
+# 4995  8307  6937  7780 
+VlnPlot(integrate, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+
+##cellphonedb#####
+library(Seurat)
+library(biomaRt)
+library(dplyr)
+setwd("~/project/scRNA_PND/")
+data<-readRDS("dim15_resolution0.4_cluster14.rds")
+meta<-data@meta.data
+write.csv(meta,"meta.csv",col.names = T,quote = F)
+
+gene<-unlist(row.names(as.matrix(data@assays$RNA@counts)))
+mouse<-useMart('ensembl',dataset = "mmusculus_gene_ensembl",host="http://feb2014.archive.ensembl.org")
+human<-useMart('ensembl',dataset = "hsapiens_gene_ensembl",host="http://feb2014.archive.ensembl.org")
+
+count<-as.matrix(data@assays$RNA@counts)
+gene<-row.names(count)
+m2h <- getLDS(attributes = c("mgi_symbol"),filters = "mgi_symbol",
+              values = gene,mart = mouse,
+              attributesL = c("hgnc_symbol"),
+              martL = human,uniqueRows = T)
+#write.table(as.matrix(data@assays$RNA@counts),"服务器/Wang_yang/C4_scRNA/data/count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+m2h <- m2h %>% distinct(MGI.symbol, .keep_all = T)
+m2h <- m2h %>% distinct(HGNC.symbol, .keep_all = T)
+m2h<-m2h[-12700,]
+
+a<-count[m2h$MGI.symbol,]
+rownames(a)<-m2h$HGNC.symbol
+write.table(a,"m2h_count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+write.table(data@meta.data,"服务器/Wang_yang/C4_scRNA/data/cellphonedb/D16/meta.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+
+write.table(count,"count.tsv",quote = F,sep = "\t",col.names = T,row.names = T)
+
+#***cellchat####
+library(CellChat)
+library(patchwork)
+setwd("project/scRNA_PND/")
+# data<-readRDS("dim15_resolution0.4_cluster14.rds")
+# label<-data.frame(seurat_clusters=c(0:13),label = paste("cluster_",c(0:13)))
+# #colnames(label)<-c("seurat_clusters","label")
+# label$seurat_clusters<- as.factor(label$seurat_clusters)
+# meta.data<-left_join(data@meta.data,label,by="seurat_clusters")
+# label<-unlist(meta.data$label)
+# names(label)<-colnames(data)
+# data <- AddMetaData(object = data, metadata = label, col.name = "label")
+# saveRDS(data,"dim15_resolution0.4_cluster14_cellchat.rds")
+data<-readRDS("dim15_resolution0.4_cluster14_cellchat.rds")
+DefaultAssay(data) = "RNA"
+PND15<-subset(data,subset = orig.ident =="PND15")
+meta<-PND15@meta.data
+cellchat <- createCellChat(object = PND15, meta = meta, group.by = "label")
+CellChatDB <- CellChatDB.mouse 
+showDatabaseCategory(CellChatDB)
+cellchat@DB<-CellChatDB
+cellchat <- subsetData(cellchat)
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.mouse)
+
+cellchat <- computeCommunProb(cellchat, raw.use = TRUE)
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+# prob<-as.data.frame(cellchat@net$pval)
+# netVisual_bubble(cellchat, sources.use = 3,
+#                  #targets.use = c(5:11),
+#                  signaling = c("WNT","CXCL"),
+#                  remove.isolate = FALSE)
+# signal<-cellchat@LR$LRsig
+
+saveRDS(cellchat, file = "PND15/PND15_cellchat.rds")
+#******cellchat绘图#####
+#cellchat<-readRDS("PND15/PND15_cellchat.rds")
+
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+
+# mat <- cellchat@net$weight
+# par(mfrow = c(1,1), xpd=TRUE)
+# for (i in 1:nrow(mat)) {
+#   mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+#   mat2[i, ] <- mat[i, ]
+#   plot<-netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+#   pdf(paste0("PND15/interaction/",colnames(mat)[i],".pdf"),width = 5,height = 7)
+#   print(plot)
+#   dev.off()
+# }
+par(mfrow = c(1,1), xpd=TRUE)
+pathway<-cellchat@netP$pathways
+for (i in pathway) {
+  plot<-netVisual_aggregate(cellchat, signaling = i, layout = "circle")
+  pdf(paste0("PND15/pathway/circle/",i,".pdf"),width = 5,height = 5)
+  print(plot)
+  dev.off()
+}
+
+for (i in pathway) {
+  plot<-netVisual_heatmap(cellchat, signaling = i, color.heatmap = "Reds")
+  pdf(paste0("PND15/pathway/heatmap/",i,".pdf"),width = 6.5,height = 6)
+  print(plot)
+  dev.off()
+}
+
+
+
+
