@@ -1,0 +1,116 @@
+
+#BiocManager::install("pcaMethods")
+#devtools::install_github("velocyto-team/velocyto.R")
+library(velocyto.R)
+library(stringr)
+library(tidyr)
+library(Seurat)
+#devtools::install_github("aertslab/SCopeLoomR")
+library(SCopeLoomR)
+
+#setwd("~/Zhang/scRNA_PND/")
+
+dir<-list.files("./",pattern = ".loom$",recursive = T)
+
+data<-readRDS("dim15_resolution0.4_cluster14.rds")
+DefaultAssay(data) <- "RNA"
+meta<-data@meta.data
+data<-subset(data,subset = seurat_clusters != "1")
+label<-data.frame(seurat_clusters = as.character(c(0,2:13)),
+                  label = c("Str_1", "Epi_1", "Str_2", "Str_3", "Epi_2", "Myo_1",  "Peri", "Meso", "Endo","Epi_3","T", "Mac", "Myo_2"))
+label<-left_join(meta,label,by = "seurat_clusters")
+data$label<-label$label
+
+seurat_barcode<-data.frame(cell = colnames(data),sample = data@meta.data$orig.ident,row.names = colnames(data))
+
+loom<-list()
+a = 0
+for (i in dir) {
+  a = a+1
+  name<-str_split(str_split(i,"\\/")[[1]][2],"\\.")[[1]][1]
+  loom[[name]] <-read.loom.matrices(file = i)
+  loom_<-loom[[name]]
+  colnames(loom_$spliced)<-paste0(gsub(paste0(name,":"),"",gsub("x","",colnames(loom_$spliced))),paste0("_",a))
+  colnames(loom_$unspliced)<-colnames(loom_$spliced)
+  colnames(loom_$ambiguous)<-colnames(loom_$spliced)
+  loom[[name]]<-loom_
+}
+
+loom_barcode<-data.frame(cell = c(colnames(loom$PND1_Aligned_4L0Z5$spliced),colnames(loom$PND10_Aligned_1KY8H$spliced),
+                                  colnames(loom$PND15_Aligned_VUXNO$spliced),
+                                  colnames(loom$PND5_Aligned_R8DQL$spliced)),
+                         row.names = c(colnames(loom$PND1_Aligned_4L0Z5$spliced),colnames(loom$PND10_Aligned_1KY8H$spliced),
+                                       colnames(loom$PND15_Aligned_VUXNO$spliced),
+                                       colnames(loom$PND5_Aligned_R8DQL$spliced))
+)
+
+subset_cell<-intersect(loom_barcode$cell,seurat_barcode$cell)
+gene<-intersect(rownames(data),row.names(loom$PND1_Aligned_4L0Z5$spliced))
+
+all_loom<-loom$PND1_Aligned_4L0Z5
+all_loom$spliced<-cbind(loom$PND1_Aligned_4L0Z5$spliced,
+                        loom$PND10_Aligned_1KY8H$spliced,
+                        loom$PND15_Aligned_VUXNO$spliced,
+                        loom$PND5_Aligned_R8DQL$spliced)
+all_loom$unspliced<-cbind(loom$PND1_Aligned_4L0Z5$unspliced,
+                          loom$PND10_Aligned_1KY8H$unspliced,
+                          loom$PND15_Aligned_VUXNO$unspliced,
+                          loom$PND5_Aligned_R8DQL$unspliced)
+all_loom$ambiguous<-cbind(loom$PND1_Aligned_4L0Z5$ambiguous,
+                          loom$PND10_Aligned_1KY8H$ambiguous,
+                          loom$PND15_Aligned_VUXNO$ambiguous,
+                          loom$PND5_Aligned_R8DQL$ambiguous)
+
+
+all_loom$spliced<-all_loom$spliced[gene,subset_cell]
+all_loom$unspliced<-all_loom$unspliced[gene,subset_cell]
+all_loom$ambiguous<-all_loom$ambiguous[gene,subset_cell]
+
+seurat<-data[gene,subset_cell]
+seurat[["spliced"]] <- CreateAssayObject(counts = all_loom$spliced)
+seurat[["unspliced"]] <- CreateAssayObject(counts = all_loom$unspliced)
+seurat[["ambiguous"]] <- CreateAssayObject(counts = all_loom$ambiguous)
+
+
+####准备h5ad文件####
+X<-GetAssayData(object = seurat, assay = "RNA", slot = 'counts')
+obs <- .regularise_df(seurat@meta.data, drop_single_values = T)
+var <- .regularise_df(GetAssay(seurat, assay = "RNA")@meta.features, drop_single_values = T)
+obsm <- NULL
+reductions <- names(seurat@reductions)
+if (length(reductions) > 0) {
+  obsm <- sapply(
+    reductions,
+    function(name) as.matrix(Embeddings(seurat, reduction=name)),
+    simplify = FALSE
+  )
+  names(obsm) <- paste0('X_', tolower(names(seurat@reductions)))
+}
+layers <- list()
+for (layer in c("spliced", "unspliced", "ambiguous")) {
+  mat <- GetAssayData(object = seurat, assay = layer, slot = "count")
+  layers[[layer]] <- Matrix::t(mat)
+}
+anndata <- reticulate::import('anndata', convert = FALSE)
+adata <- anndata$AnnData(
+  X = Matrix::t(X),
+  obs = obs,
+  var = var,
+  obsm = obsm,
+  layers = layers
+)
+adata$write("analysis_noKO.h5ad")
+
+####必要function####
+.regularise_df <- function(df, drop_single_values = TRUE) {
+  if (ncol(df) == 0) df[['name']] <- rownames(df)
+  if (drop_single_values) {
+    k_singular <- sapply(df, function(x) length(unique(x)) == 1)
+    if (sum(k_singular) > 0)
+      warning(paste('Dropping single category variables:'),
+              paste(colnames(df)[k_singular], collapse=', '))
+    df <- df[, !k_singular, drop=F]
+    if (ncol(df) == 0) df[['name']] <- rownames(df)
+  }
+  return(df)
+}
