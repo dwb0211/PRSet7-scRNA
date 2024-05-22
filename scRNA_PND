@@ -1,10 +1,13 @@
-######数据过滤#######
+##### scRNA-seq #####
+
+## 1
 library(Seurat)
 library(ggplot2)
 library(dplyr)
 #remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
 library(DoubletFinder)
-dir<-dir(path = "~/project/scRNA_PND/",pattern = "*PND15.*matrix$")
+
+dir<-dir(path = "~/project/scRNA_PND/",pattern = "*PND.*matrix$")
 data<-list()
 for (i in dir) {
   count<-Read10X(paste0("/Users/twenty-two/project/scRNA_PND/",i))
@@ -12,10 +15,10 @@ for (i in dir) {
   obj[["percent.mt"]]<-PercentageFeatureSet(object = obj,pattern = "^mt-")
   data[unlist(str_split(i,"_"))[1]]<-subset(obj,subset = nFeature_RNA>500 & percent.mt<5)#10
 }
-# Visualize QC metrics as a violin plot
+
 VlnPlot(data[[2]], features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
-######数据预处理######
+## 2
 data <- lapply(X = data, FUN = function(x) {
   x <- NormalizeData(x)
   x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
@@ -25,32 +28,29 @@ data <- lapply(X = data, FUN = function(x) {
   x <- ScaleData(x, features = features, verbose = FALSE)
   x <- RunPCA(x, features = features, verbose = FALSE)
 })
-######数据整合umap聚类#####
+
+## 3
 anchors <- FindIntegrationAnchors(object.list = data, anchor.features = features, reduction = "rpca")
 integrate <- IntegrateData(anchorset = anchors)
-# specify that we will perform downstream analysis on the corrected data note that the
-# original unmodified data still resides in the 'RNA' assay
+
 DefaultAssay(integrate) <- "integrated"
-# Run the standard workflow for visualization and clustering
+
 integrate <- ScaleData(integrate, verbose = FALSE)
 integrate <- RunPCA(integrate, npcs = 100, verbose = FALSE)
-# integrate <- JackStraw(integrate, num.replicate = 100)
-# integrate <- ScoreJackStraw(integrate, dims = 1:30)
-# JackStrawPlot(integrate, dims = 1:20)
-# ElbowPlot(integrate)
+integrate <- JackStraw(integrate, num.replicate = 100)
+integrate <- ScoreJackStraw(integrate, dims = 1:30)
+JackStrawPlot(integrate, dims = 1:20)
+ElbowPlot(integrate)
 integrate <- RunUMAP(integrate, reduction = "pca", dims = 1:15)
 integrate <- FindNeighbors(integrate, reduction = "pca", dims = 1:15)
 integrate <- FindClusters(integrate, resolution = 0.35)
 DimPlot(integrate, reduction = "umap",label = T,split.by = "orig.ident")
 
-#subset<-subset(integrate,subset = seurat_clusters !=14)
-saveRDS(integrate,"~/project/scRNA_PND/PND15_KO_dim15_resolution0.35_cluster15.rds")
+saveRDS(integrate,"~/project/scRNA_PND/PND.rds")
 
-
-
-####计算基因表达均值&marker基因####
+## 4
 DefaultAssay(integrate) = "RNA"
-ave<-AverageExpression(subset)
+ave<-AverageExpression(integrate)
 write.table(ave$RNA,"scRNA_PND/ave_expression.txt",quote = F,sep = "\t")
 markers <- FindAllMarkers(integrate, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 # markers %>%
@@ -58,63 +58,622 @@ markers <- FindAllMarkers(integrate, only.pos = TRUE, min.pct = 0.25, logfc.thre
 #   slice_max(n = 2, order_by = avg_log2FC)
 write.table(markers,"~/project/scRNA_PND/marker.txt",sep = "\t",quote = F)
 
-PND5<-subset(data,subset = orig.ident =="PND5")
-ave<-AverageExpression(PND5)
-write.csv(ave$RNA,"project/scRNA_PND/PND5_aveExp.csv")
+data<-readRDS("PND.rds")
 
-DefaultAssay(integrate) = "RNA"
-# find markers for every cluster compared to all remaining cells, report only the positive
-# 
-# PND1 PND10 PND15  PND5 
-# 4995  8307  6937  7780 
-VlnPlot(integrate, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+mycolor<-c("#ff9b9b","#ffc89b","#ffdd95","#d8e7ca","#bcefdd","#81d8d0","#9bc8ff","#999acd","#cdacdb","#d08997","#ffd0e9","#cbb0ad","#c09f7e")
+DimPlot(data,reduction="umap",label=T,cols=mycolor)
+
+ave<-AverageExpression(data,group.by="ident",assays="RNA")
+cg<-names(tail(sort(apply(ave[[1]],1,sd)),1000))
+library(pheatmap)
+pheatmap::pheatmap(cor(ave[[1]][cg,],method="spearman"),color=colorRampPalette(c("#81d8d0","white","#ff9b9b"))(100))
+
+mylevel<-c("0","3","4","2","5","10","6","13","7","8","9","11","12")
+Idents(data)<-factor(Idents(data),levels=mylevel)
+DotPlot(data,features=c("Pdgfra","Wnt16","Col6a4","Bmp7","Gli1","Htra3","Igfbp3","Dcn","Lum","Epcam","Wnt7a","Tacstd2","Foxa2","Acta2","Myh11","Rgs5","Notch3","Upk3b","Pecam1","Kdr","Ptprc","Cd3g","Lyz2","Mki67"),cols=c("white","#ff9b9b"))
+
+FeaturePlot(data,features=c("Wnt16"),split.by="orig.ident",cols=c("lightgrey","#ff9b9b"))
+FeaturePlot(data,features=c("Htra3"),split.by="orig.ident",cols=c("lightgrey","#ff9b9b"))
+FeaturePlot(data,features=c("Foxa2"),split.by="orig.ident",cols=c("lightgrey","#ff9b9b"))
+FeaturePlot(data,features=c("Acta2"),split.by="orig.ident",cols=c("lightgrey","#ff9b9b"))
+
+VlnPlot(data,features=c("Pdgfra","Epcam","Myh11","Rgs5","Upk3b","Pecam1","Cd3g","Lyz2"),pt.size=0)
+
+markers<-FindAllMarkers(data,only.pos=T,min.pct=0.25,thresh.use=0.25)
+top10<-markers %>% group_by(cluster) %>% top_n(10,avg_log2FC)
+DoHeatmap(subset(data,downsample=100),top10$gene,group.colors=c("#ff9b9b","#ffc89b","#ffdd95","#d8e7ca","#bcefdd","#81d8d0","#9bc8ff","#999acd","#cdacdb","#d08997","#ffd0e9","#cbb0ad","#c09f7e"))
 
 
-##cellphonedb#####
+##### RNA velocity 1 (ZLL) #####
+
+setwd("/mnt/My_disk/Zhang_leilei/scRNA_PND/analysis/RNA_velocity/")
+#BiocManager::install("pcaMethods")
+#devtools::install_github("velocyto-team/velocyto.R")
+library(velocyto.R)
+library(stringr)
+library(tidyr)
 library(Seurat)
-library(biomaRt)
-library(dplyr)
-setwd("~/project/scRNA_PND/")
-data<-readRDS("dim15_resolution0.4_cluster14.rds")
+#devtools::install_github("aertslab/SCopeLoomR")
+library(SCopeLoomR)
+#setwd("~/Zhang/scRNA_PND/")
+
+dir<-list.files("./",pattern = ".loom$",recursive = T)
+
+data<-readRDS("PND.rds")
+
+DefaultAssay(data) <- "RNA"
 meta<-data@meta.data
-write.csv(meta,"meta.csv",col.names = T,quote = F)
+label<-data.frame(seurat_clusters = as.character(c(0,2:13)),
+                  label = c("Str_1", "Epi_1", "Str_2", "Str_3", "Epi_2", "Myo_1",  "Peri", "Meso", "Endo","Epi_3","T", "Mac", "Myo_2"))
+label<-left_join(meta,label,by = "seurat_clusters")
+data$label<-label$label
 
-gene<-unlist(row.names(as.matrix(data@assays$RNA@counts)))
-mouse<-useMart('ensembl',dataset = "mmusculus_gene_ensembl",host="http://feb2014.archive.ensembl.org")
-human<-useMart('ensembl',dataset = "hsapiens_gene_ensembl",host="http://feb2014.archive.ensembl.org")
+seurat_barcode<-data.frame(cell = colnames(data),sample = data@meta.data$orig.ident,row.names = colnames(data))
 
-count<-as.matrix(data@assays$RNA@counts)
-gene<-row.names(count)
-m2h <- getLDS(attributes = c("mgi_symbol"),filters = "mgi_symbol",
-              values = gene,mart = mouse,
-              attributesL = c("hgnc_symbol"),
-              martL = human,uniqueRows = T)
-#write.table(as.matrix(data@assays$RNA@counts),"服务器/Wang_yang/C4_scRNA/data/count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
-m2h <- m2h %>% distinct(MGI.symbol, .keep_all = T)
-m2h <- m2h %>% distinct(HGNC.symbol, .keep_all = T)
-m2h<-m2h[-12700,]
+loom<-list()
+a = 0
+for (i in dir) {
+  a = a+1
+  name<-str_split(str_split(i,"\\/")[[1]][2],"\\.")[[1]][1]
+  loom[[name]] <-read.loom.matrices(file = i)
+  loom_<-loom[[name]]
+  colnames(loom_$spliced)<-paste0(gsub(paste0(name,":"),"",gsub("x","",colnames(loom_$spliced))),paste0("_",a))
+  colnames(loom_$unspliced)<-colnames(loom_$spliced)
+  colnames(loom_$ambiguous)<-colnames(loom_$spliced)
+  loom[[name]]<-loom_
+}
 
-a<-count[m2h$MGI.symbol,]
-rownames(a)<-m2h$HGNC.symbol
-write.table(a,"m2h_count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
-write.table(data@meta.data,"服务器/Wang_yang/C4_scRNA/data/cellphonedb/D16/meta.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+loom_barcode<-data.frame(cell = c(colnames(loom$PND1_Aligned_4L0Z5$spliced),colnames(loom$PND10_Aligned_1KY8H$spliced),
+                                  colnames(loom$PND15_Aligned_VUXNO$spliced),
+                                  colnames(loom$PND5_Aligned_R8DQL$spliced)),
+                         row.names = c(colnames(loom$PND1_Aligned_4L0Z5$spliced),colnames(loom$PND10_Aligned_1KY8H$spliced),
+                                       colnames(loom$PND15_Aligned_VUXNO$spliced),
+                                       colnames(loom$PND5_Aligned_R8DQL$spliced))
+)
 
-write.table(count,"count.tsv",quote = F,sep = "\t",col.names = T,row.names = T)
+subset_cell<-intersect(loom_barcode$cell,seurat_barcode$cell)
+gene<-intersect(rownames(data),row.names(loom$PND1_Aligned_4L0Z5$spliced))
 
-#***cellchat####
+all_loom<-loom$PND1_Aligned_4L0Z5
+all_loom$spliced<-cbind(loom$PND1_Aligned_4L0Z5$spliced,
+                        loom$PND10_Aligned_1KY8H$spliced,
+                        loom$PND15_Aligned_VUXNO$spliced,
+                        loom$PND5_Aligned_R8DQL$spliced)
+all_loom$unspliced<-cbind(loom$PND1_Aligned_4L0Z5$unspliced,
+                          loom$PND10_Aligned_1KY8H$unspliced,
+                          loom$PND15_Aligned_VUXNO$unspliced,
+                          loom$PND5_Aligned_R8DQL$unspliced)
+all_loom$ambiguous<-cbind(loom$PND1_Aligned_4L0Z5$ambiguous,
+                          loom$PND10_Aligned_1KY8H$ambiguous,
+                          loom$PND15_Aligned_VUXNO$ambiguous,
+                          loom$PND5_Aligned_R8DQL$ambiguous)
+
+all_loom$spliced<-all_loom$spliced[gene,subset_cell]
+all_loom$unspliced<-all_loom$unspliced[gene,subset_cell]
+all_loom$ambiguous<-all_loom$ambiguous[gene,subset_cell]
+
+seurat<-data[gene,subset_cell]
+seurat[["spliced"]] <- CreateAssayObject(counts = all_loom$spliced)
+seurat[["unspliced"]] <- CreateAssayObject(counts = all_loom$unspliced)
+seurat[["ambiguous"]] <- CreateAssayObject(counts = all_loom$ambiguous)
+
+X<-GetAssayData(object = seurat, assay = "RNA", slot = 'counts')
+obs <- .regularise_df(seurat@meta.data, drop_single_values = T)
+var <- .regularise_df(GetAssay(seurat, assay = "RNA")@meta.features, drop_single_values = T)
+obsm <- NULL
+reductions <- names(seurat@reductions)
+if (length(reductions) > 0) {
+  obsm <- sapply(
+    reductions,
+    function(name) as.matrix(Embeddings(seurat, reduction=name)),
+    simplify = FALSE
+  )
+  names(obsm) <- paste0('X_', tolower(names(seurat@reductions)))
+}
+layers <- list()
+for (layer in c("spliced", "unspliced", "ambiguous")) {
+  mat <- GetAssayData(object = seurat, assay = layer, slot = "count")
+  layers[[layer]] <- Matrix::t(mat)
+}
+anndata <- reticulate::import('anndata', convert = FALSE)
+adata <- anndata$AnnData(
+  X = Matrix::t(X),
+  obs = obs,
+  var = var,
+  obsm = obsm,
+  layers = layers
+)
+adata$write("analysis_noKO.h5ad")
+
+.regularise_df <- function(df, drop_single_values = TRUE) {
+  if (ncol(df) == 0) df[['name']] <- rownames(df)
+  if (drop_single_values) {
+    k_singular <- sapply(df, function(x) length(unique(x)) == 1)
+    if (sum(k_singular) > 0)
+      warning(paste('Dropping single category variables:'),
+              paste(colnames(df)[k_singular], collapse=', '))
+    df <- df[, !k_singular, drop=F]
+    if (ncol(df) == 0) df[['name']] <- rownames(df)
+  }
+  return(df)
+}
+
+
+##### RNA velocity 2 (RJ) #####
+
+dat = readRDS("/share/data5/ExtraJobs/202310_velocity/data.rds")
+seurat.obj = dat
+
+p <- UMAPPlot(seurat.obj, label = T) +
+  guides(color = "none")
+ggsave("umap.pdf", p, width = 5, height = 5)
+
+df = data.frame(seurat.obj$orig.ident)
+df$cellname = rownames(df)
+tmp = do.call(rbind, strsplit(df$cellname, "_"))
+df$barcode = tmp[,1]
+df$group = tmp[,2]
+table(df$group, df$dat.orig.ident)
+genes = rownames(seurat.obj)
+
+library(velocyto.R)
+library(Seurat)
+input_loom <- "/share/data5/ExtraJobs/202310_velocity/data/merge.loom"
+sample.loom <- read.loom.matrices(input_loom, engine = "hdf5r")
+xc = colnames(sample.loom[[1]])
+xc_tag = data.frame(do.call(rbind, strsplit(xc, ":")))
+xc_tag$cellname = gsub("x","",xc_tag$X2)
+xc_tag$group = 1
+xc_tag$group[which(xc_tag$X1=="PND5")] = 2
+xc_tag$group[which(xc_tag$X1=="PND10")] = 3
+xc_tag$group[which(xc_tag$X1=="PND15")] = 4
+xc_tag$group[which(xc_tag$X1=="PND15KO")] = 5
+xc_tag$new_cellname = paste0(xc_tag$cellname,"_", xc_tag$group)
+xc_tag$old_cellname = xc
+
+f_cell = intersect(colnames(seurat.obj), xc_tag$new_cellname)
+loom.gene = rownames(sample.loom[[1]])
+loom.gene[duplicated(loom.gene)] = paste0(loom.gene[duplicated(loom.gene)],".1") # 解决重复问题
+x = which(duplicated(loom.gene))
+loom.gene[x] = paste0(gsub("\\.1","",loom.gene[x]),".2")
+f_gene = intersect(rownames(seurat.obj), loom.gene)
+
+new.loom = sample.loom
+for(i in 1:3){
+  rownames(new.loom[[i]]) = loom.gene
+  colnames(new.loom[[i]]) = xc_tag$new_cellname
+  new.loom[[i]] = new.loom[[i]][f_gene, f_cell]
+}
+save(new.loom, file = "new.loom.rda")
+
+seurat.obj[["spliced"]] <- CreateAssayObject(counts = new.loom$spliced)
+seurat.obj[["unspliced"]] <- CreateAssayObject(counts = new.loom$unspliced)
+seurat.obj[["ambiguous"]] <- CreateAssayObject(counts = new.loom$ambiguous) 
+save(seurat.obj, file = "/share/data5/ExtraJobs/202310_velocity/seurat_obj_spliced.rda")
+
+library(SeuratDisk)
+SaveH5Seurat(seurat.obj, filename = "/share/data5/ExtraJobs/202310_velocity/seurat_loom.h5Seurat")
+Convert("/share/data5/ExtraJobs/202310_velocity/seurat_loom.h5Seurat", dest = "h5ad")
+
+adata = scv.read("/share/data5/ExtraJobs/202310_velocity/seurat_loom.h5ad")
+
+scv.pp.filter_and_normalize(adata)
+scv.pp.moments(adata)
+scv.tl.velocity(adata, mode = "stochastic")
+scv.tl.velocity_graph(adata)
+scv.pl.velocity_embedding_stream(adata, basis="umap", color="seurat_clusters", save = "stream.svg")
+scv.pl.velocity_embedding(adata, basis="umap", color="seurat_clusters", arrow_length=3, arrow_size=2, save = "embedding.svg")
+scv.pl.velocity_embedding_grid(adata, basis='umap', color="seurat_clusters", save = "grid.svg")
+scv.pl.velocity_graph(adata, threshold=.1, c = "seurat_clusters", save = "_graph.pdf")
+adata.write_h5ad("adata_velocity.h5ad")
+
+
+##### SCENIC #####
+
+## ！/usr/bin/bash
+## cd ./pyscenic#
+## pip install -r requirements.txt#
+## pip install pyscenic#0.12.0#
+
+## wget https://github.com/aertslab/pySCENIC/tree/master/resources/hs_hgnc_tfs.txt
+## wget https://resources.aertslab.org/cistarget/motif2tf/motifs-v10nr_clust-nr.hgnc-m0.001-o0.0.tbl
+## wget https://resources.aertslab.org/cistarget/databases/homo_sapiens/hg38/refseq_r80/mc_v10_clust/gene_based/hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather
+
+## 1
+root_path=/share/data6/tmp/renjun/ExtraJobs/202310_velocity_SCENIC/20231111_SCENIC/
+  cluster=0_2
+cores=30
+save_path=$root_path/cluster$cluster
+mkdir -p $save_path 
+cd $save_path
+tf_file=/share/data6/tmp/renjun/Reference/cisTarget_databases/tflist/mm_mgi_tfs.txt
+data_loom=/share/data6/tmp/renjun/ExtraJobs/202310_velocity_SCENIC/20231111_SCENIC/$cluster.loom
+tbl_file=/share/data6/tmp/renjun/Reference/cisTarget_databases/motifs-v10nr_clust-nr.mgi-m0.001-o0.0.tbl
+feather_file_1=/share/data6/tmp/renjun/Reference/cisTarget_databases/mm10_500bp_up_100bp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather
+feather_file_2=/share/data6/tmp/renjun/Reference/cisTarget_databases/mm10_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather
+
+## 2
+pyscenic grn --num_workers $cores \
+--output $save_path/TF_gene_coexp_adj.tsv \
+--method grnboost2 \
+$data_loom $tf_file
+
+## 3
+pyscenic ctx $save_path/TF_gene_coexp_adj.tsv \
+$feather_file_1 \
+$feather_file_2 \
+--annotations_fname $tbl_file  \
+--expression_mtx_fname $data_loom \
+--mode "dask_multiprocessing" \
+--output $save_path/reg.csv  \
+--num_workers $cores   \
+--mask_dropouts 
+
+## 4
+pyscenic aucell $data_loom /$save_path/reg.csv --output $save_path/sce_regulon_AUC.csv --num_workers $cores
+pyscenic aucell $data_loom /$save_path/reg.csv --output $save_path/sce_regulon_AUC.loom --num_workers $cores
+
+arboreto_with_multiprocessing
+arboreto_with_multiprocessing.py \
+    /home/yangjing/pyscenic/B.loom \
+    /home/yangjing/pyscenic/ref_human/hs_hgnc_tfs.txt \
+    --method grnboost2 \
+    --output ./output/TF_gene_coexp_adj_B.tsv \
+    --num_workers 20 \
+    --seed 777
+
+## 5
+library(SCopeLoomR)
+library(AUCell)
+library(SCENIC)
+library(dplyr)
+library(RColorBrewer)
+library(ggplotify)
+library(ComplexHeatmap)
+
+cluster_tag="0_2"
+save_p = paste0("/share/data6/tmp/renjun/ExtraJobs/202310_velocity_SCENIC/20231111_SCENIC/cluster",cluster_tag,"/")
+
+loom <- open_loom(paste0(save_p, "sce_regulon_AUC.loom"))
+regulons_incidMat <- get_regulons(loom, column.attr.name="Regulons")
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonAUC <- get_regulons_AUC(loom, column.attr.name='RegulonsAUC')
+regulonAucThresholds <- get_regulon_thresholds(loom)
+close_loom(loom)
+
+auc = fread("sce_regulon_AUC.csv", data.table=F)
+rownames(auc) = auc[,1]
+auc = auc[,-1]
+auc = t(auc)
+
+meta <- read.csv(paste0(save_p, "../", cluster_tag, "_meta.csv"), sep='\t')
+m = meta[, "seurat_clusters", drop=F]
+m$seurat_clusters = as.factor(paste0("cluster", m$seurat_clusters))
+
+ss <- calcRSS(AUC=auc, cellAnnotation = m, cellTypes = c("cluster0", "cluster2"))
+write.csv(auc, file = "regulon_auc_matirx.csv")
+write.csv(ss, file = "regulon_score.csv")
+
+ss_cut = 0.42
+reg_name = rownames(ss)[which(rowMeans(ss) > ss_cut)]
+ss_c = ss[reg_name, ]
+# c = t(scale(t(ss_c)))
+c = ss_c
+
+hm = Heatmap(c,
+             show_column_names = T,
+             show_row_names = T,
+             show_row_dend = F,
+             show_column_dend = F,
+             cluster_rows = T,
+             cluster_columns = T,
+             name = "Regulon Score")
+hm = as.ggplot(hm) +
+  labs(title = "cluster 2") +
+  theme(plot.margin = unit(c(0.5,0.5,0.5,0.5), "cm"),
+        plot.title = element_text(size = 20))
+
+ggsave(paste0("heatmap_ss",ss_cut,"_notscale.pdf"), hm, width = 4, height=50, limitsize = F)
+
+
+##### CellChat 1 (ZYY) #####
+
+library(Seurat)
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+
+## Create a CellChat object
+ser.obj = readRDS('data.rds')
+for(type in c('pnd15','pnd15ko')){
+  cc.obj <- subset(ser.obj, orig.ident == type)
+  cc.obj@meta.data$seurat_clusters = paste0("cluster", cc.obj@meta.data$seurat_clusters)
+  cellchat <- createCellChat(object = cc.obj, group.by = "seurat_clusters")
+  ## Set the ligand-receptor interaction database
+  CellChatDB <- CellChatDB.mouse ## use CellChatDB.mouse if running on mouse data
+  ## Show the structure of the database
+  dplyr::glimpse(CellChatDB$interaction)
+  ## use all CellChatDB for cell-cell communication analysis
+  CellChatDB.use <- CellChatDB ## simply use the default CellChatDB
+  ## set the used database in the object
+  cellchat@DB <- CellChatDB.use
+  ## Preprocessing the expression data for cell-cell communication analysis
+  cellchat <- subsetData(cellchat) ## This step is necessary even if using the whole database
+  future::plan("multiprocess", workers = 1) ## do parallel
+  cellchat <- identifyOverExpressedGenes(cellchat)
+  cellchat <- identifyOverExpressedInteractions(cellchat)
+  ## Compute the communication probability and infer cellular communication network
+  cellchat <- computeCommunProb(cellchat)
+  ## Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+  cellchat <- filterCommunication(cellchat, min.cells = 10)
+  ## Extract the inferred cellular communication network as a data frame
+  df.net <- subsetCommunication(cellchat)
+  ## Infer the cell-cell communication at a signaling pathway level
+  cellchat <- computeCommunProbPathway(cellchat)
+  ## Calculate the aggregated cell-cell communication network
+  cellchat <- aggregateNet(cellchat)
+  ## Compute the network centrality scores
+  cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") ## the slot 'netP' means the inferred intercellular communication network of signaling pathways
+  ## Identify signaling groups based on their functional similarity
+  cellchat <- computeNetSimilarity(cellchat, type = "functional")
+  cellchat <- netEmbedding(cellchat, type = "functional")
+  cellchat <- netClustering(cellchat, type = "functional",nCores = 1)
+  ## Identify signaling groups based on structure similarity
+  cellchat <- computeNetSimilarity(cellchat, type = "structural")
+  cellchat <- netEmbedding(cellchat, type = "structural")
+  cellchat <- netClustering(cellchat, type = "structural",nCores = 1)
+  saveRDS(cellchat, file = paste0("cellchat_", type, ".rds"))
+}
+
+cellchat.pnd15 = readRDS(paste0('cellchat_','pnd15','.rds'))
+cellchat.pnd15ko = readRDS(paste0('cellchat_','pnd15ko','.rds'))
+object.list <- list(pnd15 = cellchat.pnd15, pnd15ko = cellchat.pnd15ko)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, type = "functional")
+cellchat <- netClustering(cellchat, type = "functional", nCores = 1)
+
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural")
+cellchat <- netClustering(cellchat, type = "structural", nCores = 1)
+
+save(object.list, cellchat, file = 'cellchat_comparing_.RData'))
+
+library(CellChat)
+library(patchwork)
+library(Seurat)
+
+load("cellchat_comparing_.RData")
+df.net <- subsetCommunication(cellchat)
+write.csv(df.net[['pnd15']], file = 'df_net_pnd15.csv', quote = FALSE)
+write.csv(df.net[['pnd15ko']], file = 'df_net_pnd15ko.csv', quote = FALSE)
+
+df.netp <- subsetCommunication(cellchat,slot.name = "netP")
+write.csv(df.netp[['pnd15']], file = 'df_net_pathway_pnd15.csv', quote = FALSE)
+write.csv(df.netp[['pnd15ko']], file = 'df_net_pathway_pnd15ko.csv', quote = FALSE)
+
+## Part I: Predict general principles of cell-cell communication
+## Compare the total number of interactions and interaction strength
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+p = gg1 + gg2
+p
+ggsave(file = "p1.compareInteractions.tiff", plot = p, height = 3, width = 4)
+ggsave(file = "p1.compareInteractions.pdf", plot = p, height = 3, width = 4)
+
+## Differential number of interactions or interaction strength among different cell populations
+pdf('p1.differential_Interactions.pdf', width = 12, height = 6)
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+gg1 <- netVisual_heatmap(cellchat)
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+gg1 + gg2
+dev.off()
+
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+pdf('p1.differential_Interactions.circle.1.pdf', width = 12, height = 6)
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count[,], weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+dev.off()
+
+## Compare the major sources and targets in 2D space
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) ## control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+pdf('p1.signalingrole_scatter.pdf', height = 4, width = 9)
+patchwork::wrap_plots(plots = gg)
+dev.off()
+
+cellchat1 = cellchat
+cellchat1@netP = list(pnd15 = cellchat1@netP$pnd15, Ctrl = cellchat1@netP$pnd15ko)
+gg <- list()
+for (i in as.character(unique(cellchat1@meta$seurat_clusters))){
+  gg[[i]] <- netAnalysis_signalingChanges_scatter(cellchat1, idents.use = i, signaling.exclude = "MIF")
+}
+p = patchwork::wrap_plots(plots = gg, ncol = 5)
+ggsave("p1.specific_signaling_change.pdf", plot = p, width = 25, height = 10)
+ggsave("p1.specific_signaling_change.tiff", plot = p, width = 25, height = 10)
+
+## Identify signaling groups based on their functional similarity
+pdf('p2.functional_similarity_embedding.pdf', width = 8, height = 7)
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+dev.off()
+
+## Identify signaling groups based on structure similarity
+pdf('p2.structural_similarity_embedding.pdf', width = 8, height = 7)
+netVisual_embeddingPairwise(cellchat, type = "structural", label.size = 3.5)
+dev.off()
+pdf('p2.structural_similarity_embedding_zoomin.pdf', width = 8, height = 7)
+netVisual_embeddingPairwiseZoomIn(cellchat, type = "structural", nCol = 2)
+dev.off()
+
+## Compute and visualize the pathway distance in the learned joint manifold
+pdf('p2.rankSimilarity.pdf')
+rankSimilarity(cellchat, type = "functional")
+dev.off()
+
+## Compare the overall information flow of each signaling pathway
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+pdf('p2.overall_comparison.pdf', width = 9, height = 8)
+gg1 + gg2
+dev.off()
+pdf('p2.overall_comparison.tiff', width = 9, height = 8)
+p = gg1 + gg2
+ggsave('p2.overall_comparison.tiff', width = 9, height = 8, plot = p)
+dev.off()
+
+## Compare outgoing (or incoming) signaling associated with each cell population
+library(ComplexHeatmap)
+i = 1
+## combining all the identified signaling pathways from different datasets
+pdf('p2.netAnalysis_signalingRole_heatmap_outgoing.1.pdf', width = 12, height = 18)
+pathway.union <- union(object.list[[i]]@netP$pathways, object.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap1(object.list[[i]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i], width = 5, height = 18)
+ht2 = netAnalysis_signalingRole_heatmap1(object.list[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i+1], width = 5, height = 18)
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+dev.off()
+
+pdf('p2.netAnalysis_signalingRole_heatmap_incoming.1.pdf', width = 12, height = 18)
+ht1 = netAnalysis_signalingRole_heatmap1(object.list[[i]], pattern = "incoming", signaling = pathway.union, title = names(object.list)[i], width = 5, height = 18, color.heatmap = "GnBu")
+ht2 = netAnalysis_signalingRole_heatmap1(object.list[[i+1]], pattern = "incoming", signaling = pathway.union, title = names(object.list)[i+1], width = 5, height = 18, color.heatmap = "GnBu")
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+dev.off()
+
+pdf('p2.netAnalysis_signalingRole_heatmap_all.1.pdf', width = 11, height = 18)
+ht1 = netAnalysis_signalingRole_heatmap1(object.list[[i]], pattern = "all", signaling = pathway.union, title = names(object.list)[i], width = 5, height = 18, color.heatmap = "OrRd")
+ht2 = netAnalysis_signalingRole_heatmap1(object.list[[i+1]], pattern = "all", signaling = pathway.union, title = names(object.list)[i+1], width = 5, height = 18, color.heatmap = "OrRd")
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+dev.off()
+
+## Identify dysfunctional signaling by comparing the communication probabities
+df.net <- subsetCommunication(cellchat, signaling = c("WNT", "TGFb"))
+cellchat1 <- cellchat
+pdf('p3.overall_comparison_bubble.1.pdf', width = 8, height = 6)
+p = netVisual_bubble(cellchat, sources.use = paste0("cluster",c(0,1,10)),targets.use = paste0("cluster",c(0,1,10)),  comparison = c(1, 2), angle.x = 45, signaling = c("ncWNT"))
+print(p)
+dev.off()
+
+pdf('p3.lr_comparison_up_and_down_bubble.pdf', width = 13, height = 14)
+for(i in 1:14){
+  gg1 <- netVisual_bubble(cellchat, sources.use = i,  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in pnd15ko", angle.x = 45, remove.isolate = T)
+  gg2 <- netVisual_bubble(cellchat, sources.use = i, comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in pnd15ko", angle.x = 45, remove.isolate = T)
+  p = gg1 + gg2
+  print(p)
+}
+dev.off()
+
+## Identify dysfunctional signaling by using differential expression analysis
+pos.dataset = "pnd15"
+features.name = pos.dataset
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 1)
+net <- netMappingDEG(cellchat, features.name = features.name)
+net.up <- subsetCommunication(cellchat, net = net, datasets = "pnd15",ligand.logFC = 0.2, receptor.logFC = NULL)
+net.down <- subsetCommunication(cellchat, net = net, datasets = "pnd15ko",ligand.logFC = -0.1, receptor.logFC = -0.1)
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+pdf('p3.lr_comparison_up_and_down_bubble.byDE.pdf', width = 29, height = 13)
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up,  comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down,  comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+print(gg1)
+print(gg2)
+dev.off()
+
+## Chord diagram
+pdf('p3.lr_comparison_up_and_down_chorddiagram.byDE.pdf', width = 12, height = 6)
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_chord_gene(object.list[[1]], sources.use = c(1,7), targets.use = c(1,7), slot.name = 'net', net = net.up, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+netVisual_chord_gene(object.list[[2]], sources.use = c(1,7), targets.use = c(1,7), slot.name = 'net', net = net.down, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+dev.off()
+
+## Visually compare cell-cell communication using Hierarchy plot, Circle plot or Chord diagram
+pathway_list = intersect(cellchat@netP$pnd15$pathways, cellchat@netP$pnd15ko$pathways)
+pathways.show <- c("LAMININ")
+pdf("p4.compare_ccc_pathway_hierachy.pdf", width = 11, height = 5)
+for(pw in pathway_list){
+  pathways.show <- c(pw)
+  weight.max <- getMaxWeight(object.list, slot.name = c("netP"), attribute = pathways.show) ## control the edge weights across different datasets
+  par(mfrow = c(1,2), xpd=TRUE)
+  for (i in 1:length(object.list)) {
+    netVisual_aggregate(object.list[[i]], signaling = pathways.show, layout = "circle", edge.weight.max = weight.max[1], edge.width.max = 10, signaling.name = paste(pathways.show, names(object.list)[i]))
+  }
+}
+dev.off()
+
+pdf("p4.compare_ccc_pathway_heatmap.pdf", width = 11, height = 5)
+for(pw in pathway_list){
+  pathways.show <- c(pw)
+  par(mfrow = c(1,2), xpd=TRUE)
+  ht <- list()
+  for (i in 1:length(object.list)) {
+    ht[[i]] <- netVisual_heatmap(object.list[[i]], signaling = pathways.show, color.heatmap = "Reds",title.name = paste(pathways.show, "signaling ",names(object.list)[i]))
+  }
+  ComplexHeatmap::draw(ht[[1]] + ht[[2]], ht_gap = unit(0.5, "cm"))
+}
+dev.off()
+
+## Chord diagram
+pdf("p4.compare_ccc_pathway_chord.pdf", width = 24, height = 12)
+for(pw in pathway_list){
+  pathways.show <- c(pw)
+  par(mfrow = c(1,2), xpd=TRUE)
+  for (i in 1:length(object.list)) {
+    netVisual_aggregate(object.list[[i]], signaling = pathways.show, layout = "chord", signaling.name = paste(pathways.show, names(object.list)[i]))
+  }
+}
+dev.off()
+
+## compare all the interactions sending from fibroblast to inflamatory immune cells
+pdf("p4.compare_interaction_chord.pdf", width = 12, height = 6)
+
+## net
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = 1, targets.use = 7,  title.name = paste0("Signaling from cluster0 - pnd15 ", names(object.list)[i]), legend.pos.x = 10, lab.cex = 0.6)
+}
+
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = 7, targets.use = 1,  title.name = paste0("Signaling from cluster2 - pnd15 ", names(object.list)[i]), legend.pos.x = 10, lab.cex = 0.6)
+}
+
+## netP
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = 1, targets.use = 7,slot.name = "netP", title.name = paste0("Signaling pathways sending from cluster0 ", names(object.list)[i]), legend.pos.x = 10, lab.cex = 0.6)
+}
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = 7, targets.use = 1,slot.name = "netP", title.name = paste0("Signaling pathways sending from cluster2 ", names(object.list)[i]), legend.pos.x = 10, lab.cex = 0.6)
+}
+dev.off()
+
+## Compare the signaling gene expression distribution between different datasets
+cellchat@meta$datasets = factor(cellchat@meta$datasets, levels = c("pnd15", "pnd15ko")) ## set factor level
+
+pdf("p4.compare_gene_expression.pdf", width = 7, height = 4)
+for(pw in pathway_list){
+  pathways.show <- c(pw)
+  p = plotGeneExpression(cellchat, signaling = pw, split.by = "datasets", colors.ggplot = T)
+  print(p)
+}
+dev.off()
+
+
+##### CellChat 2 (ZLL) #####
+
 library(CellChat)
 library(patchwork)
 setwd("project/scRNA_PND/")
-# data<-readRDS("dim15_resolution0.4_cluster14.rds")
-# label<-data.frame(seurat_clusters=c(0:13),label = paste("cluster_",c(0:13)))
-# #colnames(label)<-c("seurat_clusters","label")
-# label$seurat_clusters<- as.factor(label$seurat_clusters)
-# meta.data<-left_join(data@meta.data,label,by="seurat_clusters")
-# label<-unlist(meta.data$label)
-# names(label)<-colnames(data)
-# data <- AddMetaData(object = data, metadata = label, col.name = "label")
-# saveRDS(data,"dim15_resolution0.4_cluster14_cellchat.rds")
-data<-readRDS("dim15_resolution0.4_cluster14_cellchat.rds")
+
 DefaultAssay(data) = "RNA"
 PND15<-subset(data,subset = orig.ident =="PND15")
 meta<-PND15@meta.data
@@ -128,36 +687,35 @@ cellchat <- identifyOverExpressedInteractions(cellchat)
 cellchat <- projectData(cellchat, PPI.mouse)
 
 cellchat <- computeCommunProb(cellchat, raw.use = TRUE)
-# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+
+## Filter out the cell-cell communication if there are only few number of cells in certain cell groups
 cellchat <- filterCommunication(cellchat, min.cells = 10)
 cellchat <- computeCommunProbPathway(cellchat)
 cellchat <- aggregateNet(cellchat)
-# prob<-as.data.frame(cellchat@net$pval)
-# netVisual_bubble(cellchat, sources.use = 3,
-#                  #targets.use = c(5:11),
-#                  signaling = c("WNT","CXCL"),
-#                  remove.isolate = FALSE)
-# signal<-cellchat@LR$LRsig
+prob<-as.data.frame(cellchat@net$pval)
+netVisual_bubble(cellchat, sources.use = 3,
+                 targets.use = c(5:11),
+                 signaling = c("WNT","CXCL"),
+                 remove.isolate = FALSE)
+signal<-cellchat@LR$LRsig
 
 saveRDS(cellchat, file = "PND15/PND15_cellchat.rds")
-#******cellchat绘图#####
-#cellchat<-readRDS("PND15/PND15_cellchat.rds")
 
 groupSize <- as.numeric(table(cellchat@idents))
 par(mfrow = c(1,2), xpd=TRUE)
 netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
 netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
 
-# mat <- cellchat@net$weight
-# par(mfrow = c(1,1), xpd=TRUE)
-# for (i in 1:nrow(mat)) {
-#   mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
-#   mat2[i, ] <- mat[i, ]
-#   plot<-netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
-#   pdf(paste0("PND15/interaction/",colnames(mat)[i],".pdf"),width = 5,height = 7)
-#   print(plot)
-#   dev.off()
-# }
+mat <- cellchat@net$weight
+par(mfrow = c(1,1), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+   mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+   mat2[i, ] <- mat[i, ]
+   plot<-netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+   pdf(paste0("PND15/interaction/",colnames(mat)[i],".pdf"),width = 5,height = 7)
+   print(plot)
+   dev.off()
+ }
 par(mfrow = c(1,1), xpd=TRUE)
 pathway<-cellchat@netP$pathways
 for (i in pathway) {
@@ -175,5 +733,214 @@ for (i in pathway) {
 }
 
 
+##### cellphonedb #####
 
+library(Seurat)
+library(biomaRt)
+library(dplyr)
+setwd("~/project/scRNA_PND/")
+data<-readRDS("PND.rds")
+
+meta<-data@meta.data
+write.csv(meta,"meta.csv",col.names = T,quote = F)
+
+gene<-unlist(row.names(as.matrix(data@assays$RNA@counts)))
+mouse<-useMart('ensembl',dataset = "mmusculus_gene_ensembl",host="http://feb2014.archive.ensembl.org")
+human<-useMart('ensembl',dataset = "hsapiens_gene_ensembl",host="http://feb2014.archive.ensembl.org")
+
+count<-as.matrix(data@assays$RNA@counts)
+gene<-row.names(count)
+m2h <- getLDS(attributes = c("mgi_symbol"),filters = "mgi_symbol",
+              values = gene,mart = mouse,
+              attributesL = c("hgnc_symbol"),
+              martL = human,uniqueRows = T)
+write.table(as.matrix(data@assays$RNA@counts),"服务器/Wang_yang/C4_scRNA/data/count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+m2h <- m2h %>% distinct(MGI.symbol, .keep_all = T)
+m2h <- m2h %>% distinct(HGNC.symbol, .keep_all = T)
+m2h<-m2h[-12700,]
+
+a<-count[m2h$MGI.symbol,]
+rownames(a)<-m2h$HGNC.symbol
+write.table(a,"m2h_count.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+write.table(data@meta.data,"服务器/Wang_yang/C4_scRNA/data/cellphonedb/D16/meta.txt",sep = "\t",row.names = T,col.names = T,quote = F)
+
+write.table(count,"count.tsv",quote = F,sep = "\t",col.names = T,row.names = T)
+
+
+library(TCseq)
+exp<-read.csv("expression.csv",header=T,row.names=1)
+exp<-as.matrix(exp)
+tc<-timeclust(exp,algo="cm",k=4,standardize=T)
+p<-timeclustplot(tc,value="z-score",cols=2)
+
+
+##### RNA-seq #####
+
+library(dplyr)
+library(tidyverse)
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+setwd("/Users/christinabao/Desktop/RNA-seq")
+
+count5<-read.csv("count_PND5.csv",header=T)
+count10<-read.csv("count_PND10.csv",header=T)
+
+meta5<-data.frame(sample_id=colnames(count5[,2:5]),group_list=c(rep("CTR",2),rep("KO",2)),stringsAsFactors=T)  
+meta10<-data.frame(sample_id=colnames(count10[,2:5]),group_list=c(rep("CTR",2),rep("KO",2)),stringsAsFactors=T)  
+
+dds5<-DESeqDataSetFromMatrix(countData=count5,colData=meta5,design=~group_list,tidy=T)
+dds5<-dds5[rowSums(counts(dds5))>0,]
+dds10<-DESeqDataSetFromMatrix(countData=count10,colData=meta10,design=~group_list,tidy=T)
+dds10<-dds10[rowSums(counts(dds10))>0,]
+
+rld5<-rlog(dds5,blind=F)
+rld10<-rlog(dds10,blind=F)
+plotPCA(rld5,intgroup=c("group_list"))
+plotPCA(rld10,intgroup=c("group_list"))
+
+dds5<-DESeq(dds5)
+res5<-results(dds5,tidy=T)
+dds10<-DESeq(dds10)
+res10<-results(dds10,tidy=T)
+
+dds5<-rlogTransformation(dds5)
+exp5<-assay(dds5)
+dds10<-rlogTransformation(dds10)
+exp10<-assay(dds10)
+
+## volcano
+res5$sig<-"stable"
+res5$sig[res5$log2FoldChange>=0.585&res5$pvalue<0.05]="up"
+res5$sig[res5$log2FoldChange<=-0.585&res5$pvalue<0.05]="down"
+ggplot(res5,aes(log2FoldChange,-1*log10(pvalue)))+
+  geom_point(aes(color=sig),size=1)+
+  xlim(-10,10)+ylim(0,80)+
+  geom_hline(yintercept=1.3,linetype=2,size=0.5)+
+  geom_vline(xintercept=c(-0.585,0.585),linetype=2,size=0.5)+
+  theme_classic()+
+  scale_color_manual(values=c("#81d8d0","lightgrey","#ff9b9b"))
+
+res10$sig<-"stable"
+res10$sig[res10$log2FoldChange>=0.585&res10$pvalue<0.05]="up"
+res10$sig[res10$log2FoldChange<=-0.585&res10$pvalue<0.05]="down"
+ggplot(res10,aes(log2FoldChange,-1*log10(pvalue)))+
+  geom_point(aes(color=sig),size=1)+
+  xlim(-10,10)+ylim(0,80)+
+  geom_hline(yintercept=1.3,linetype=2,size=0.5)+
+  geom_vline(xintercept=c(-0.585,0.585),linetype=2,size=0.5)+
+  theme_classic()+
+  scale_color_manual(values=c("#81d8d0","lightgrey","#ff9b9b"))
+
+## GO&KEGG
+select_bm<-res5$baseMean>0
+select_fc<-res5$log2FoldChange>=-0.585
+select_pv<-res5$pvalue<0.05
+data_selected<-select_bm&select_fc&select_pv
+deg_list<-as.character(data_selected$row)
+enrich_go<-enrichGO(gene=deg_list,OrgDb=org.Mm.eg.db,keyType="SYMBOL",ont="BP",pvalueCutoff=0.05,qvalueCutoff=0.05)
+
+deg_entrezid<-mapIds(x=org.Mm.eg.db,keys=deg_list,keytype="SYMBOL",column="ENTREZID")
+enrich_kegg<-enrichKEGG(gene=deg_entrezid,organism="mmu",keyType="kegg")
+
+select_bm<-res10$baseMean>0
+select_fc<-res10$log2FoldChange>=-0.585
+select_pv<-res10$pvalue<0.05
+data_selected<-select_bm&select_fc&select_pv
+deg_list<-as.character(data_selected$row)
+enrich_go<-enrichGO(gene=deg_list,OrgDb=org.Mm.eg.db,keyType="SYMBOL",ont="BP",pvalueCutoff=0.05,qvalueCutoff=0.05)
+
+deg_entrezid<-mapIds(x=org.Mm.eg.db,keys=deg_list,keytype="SYMBOL",column="ENTREZID")
+enrich_kegg<-enrichKEGG(gene=deg_entrezid,organism="mmu",keyType="kegg")
+
+library(ggplot2)
+kegg<-read.csv("kegg1.csv",header=T,row.names=1)
+x<-kegg$GeneRatio
+x<-as.character(x)
+y<-strsplit(x,split="/",fixed=T)
+before<-sapply(y,function(x){x[1]})
+before<-as.numeric(before)
+after<-sapply(y,function(x){x[2]})
+after<-as.numeric(after)
+kegg$GeneRatio<-before/after
+kegg %>%
+  arrange(pvalue) %>%
+  slice(1:10) %>%
+  ggplot(aes(GeneRatio,forcats::fct_reorder(Description,Count)))+
+  geom_point(aes(color=pvalue,size=Count))+
+  scale_color_continuous(low="red",high="blue",guide=guide_colorbar(reverse=T))+
+  scale_size_continuous(range=c(2,8))+
+  labs(y=NULL)+
+  theme_bw()
+
+## GSEA
+select.bm<-res5$baseMean>5
+deg.list<-as.character(res5$row)[select.bm]
+rownames(res5)<-res5$row
+f1<-res5[deg.list,]
+exp.fc<-f1[,c(1,3)]
+exp.id<-bitr(exp.fc$row,fromType="SYMBOL",toType="ENTREZID",OrgDb=org.Mm.eg.db)
+exp.fc.id<-merge(exp.fc,exp.id,by.x="row",by.y="SYMBOL",all=F)
+exp.fc.id<-na.omit(exp.fc.id)
+exp.fc.id.sorted<-exp.fc.id[order(exp.fc.id$log2FoldChange,decreasing=T),]
+id.fc<-exp.fc.id.sorted$log2FoldChange
+names(id.fc)<-exp.fc.id.sorted$ENTREZID
+gsea<-gseKEGG(id.fc,organism="mmu",pvalueCutoff=0.5)
+
+select.bm<-res10$baseMean>5
+deg.list<-as.character(res10$row)[select.bm]
+rownames(res10)<-res10$row
+f1<-res10[deg.list,]
+exp.fc<-f1[,c(1,3)]
+exp.id<-bitr(exp.fc$row,fromType="SYMBOL",toType="ENTREZID",OrgDb=org.Mm.eg.db)
+exp.fc.id<-merge(exp.fc,exp.id,by.x="row",by.y="SYMBOL",all=F)
+exp.fc.id<-na.omit(exp.fc.id)
+exp.fc.id.sorted<-exp.fc.id[order(exp.fc.id$log2FoldChange,decreasing=T),]
+id.fc<-exp.fc.id.sorted$log2FoldChange
+names(id.fc)<-exp.fc.id.sorted$ENTREZID
+gsea<-gseKEGG(id.fc,organism="mmu",pvalueCutoff=0.5)
+
+## heatmap
+isg<-read.csv("ISG.csv",header=T)
+gene_list<-isg$gene
+data_selected5<-exp5[gene_list,]
+pheatmap(data_selected5,scale="row",cluster_rows=F,cluster_cols=F,show_rownames=T,show_colnames=T,color=colorRampPalette(colors=c("#81d8d0","white","#ff9b9b"))(100))
+
+data_selected10<-exp10[gene_list,]
+pheatmap(data_selected10,scale="row",cluster_rows=F,cluster_cols=F,show_rownames=T,show_colnames=T,color=colorRampPalette(colors=c("#81d8d0","white","#ff9b9b"))(100))
+
+
+##### CUT&Tag peak #####
+
+setwd("/Users/christinabao/Desktop/chipseq/H4K20me1_narro")
+library(dplyr)
+library(tidyverse)
+library(ChIPseeker)
+library("TxDb.Mmusculus.UCSC.mm10.knownGene")
+library(org.Mm.eg.db)
+library(ggplot2)
+
+mm10<-TxDb.Mmusculus.UCSC.mm10.knownGene
+peak5<-readPeakFile("H4K20_P5_A_peaks.narrowPeak")
+peak10<-readPeakFile("H4K20_P10_A_peaks.narrowPeak")
+covplot(peak5,weightCol="V5")
+covplot(peak10,weightCol="V5")
+
+options(ChIPseeker.ignore_1st_exon=T)
+options(ChIPseeker.ignore_1st_intron=T)
+options(ChIPseeker.ignore_promoter_subcategory=T)
+peakanno5<-annotatePeak(peak5,tssRegion=c(-3000,3000),TxDb=mm10,annoDb="org.Mm.eg.db")
+anno5<-as.data.frame(peakanno5)
+write.csv(anno5,"anno-5A.csv")
+options(ChIPseeker.ignore_1st_exon=T)
+options(ChIPseeker.ignore_1st_intron=T)
+options(ChIPseeker.ignore_promoter_subcategory=T)
+peakanno10<-annotatePeak(peak10,tssRegion=c(-3000,3000),TxDb=mm10,annoDb="org.Mm.eg.db")
+anno10<-as.data.frame(peakanno10)
+write.csv(anno10,"anno-10A.csv")
+plotAnnoPie(peakanno5)
+plotAnnoPie(peakanno10)
 
